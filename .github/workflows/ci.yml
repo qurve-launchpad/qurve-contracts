@@ -22,14 +22,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            echo "✅ Lock file found, using npm ci"
-            npm ci
-          else
-            echo "⚠️  No lock file, using npm install"
-            npm install
-          fi
+        run: npm install
 
       - name: Compile contracts
         run: npx hardhat compile
