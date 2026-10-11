@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Hardhat
+artifacts/
+cache/
+coverage/
+coverage.json
+typechain-types/
+
+# Global env
+.env
+
+# Chain-specific env
+.env.arcTestnet
+.env.arc
+.env.base
+.env.baseSepolia
+.env.robinhood
+.env.bot
+
+# Tapi track template
+!.env.example
+!.env.arcTestnet.example
+!.env.base.example
+!.env.baseSepolia.example
+!.env.robinhood.example
+!.env.bot.example
+
+# Deployments (kecuali .example)
+deployments/*.json
+!deployments/*.example.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build
+dist/
+build/
