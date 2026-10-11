@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Security Vulnerability
+    url: https://github.com/qurve-launchpad/qurve-contracts/security/advisories/new
+    about: Report a security vulnerability privately (do NOT open a public issue)
+  - name: 💬 General Discussion
+    url: https://github.com/qurve-launchpad/qurve-contracts/discussions
+    about: Ask questions and discuss ideas
+  - name: 📖 Documentation
+    url: https://github.com/qurve-launchpad/qurve-contracts/tree/main/docs
+    about: Read the architecture, deployment, and security docs
