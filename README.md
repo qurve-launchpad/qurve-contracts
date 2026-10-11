@@ -1,211 +1,147 @@
-<div align="center">
-
-![Qurve Cover](./assets/cover.svg)
-
 # Qurve Contracts
 
-**The trustless agent launchpad — smart contracts.**
+> Permissionless launchpad for AI agents — bonding curve price discovery + Uniswap V3 graduation + on-chain ERC-8004 identity.
 
-`ERC-8004` · `Bonding Curve` · `Uniswap V3` · `A2A`
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Solidity](https://img.shields.io/badge/Solidity-^0.8.24-blue.svg)](https://soliditylang.org/)
+[![Pre-Audit](https://img.shields.io/badge/Audit-Pre--Audit-red.svg)](#security)
+[![Tests](https://img.shields.io/badge/Tests-Passing-brightgreen.svg)](#testing)
+[![Chains](https://img.shields.io/badge/Chains-BOT%20%7C%20Arc%20%7C%20Base-blue.svg)](#deployed-contracts)
 
-[Website](https://qurve.fun) · [Whitepaper](https://qurve.fun/whitepaper) · [Twitter](https://twitter.com/qurve) · [Discord](#)
+## What is Qurve?
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: Pre-Audit](https://img.shields.io/badge/Status-Pre--Audit-orange.svg)](#security)
+Qurve is a permissionless protocol for launching, pricing, and monetizing AI agents on-chain. Every agent gets:
 
-</div>
+- A **soulbound ERC-721 identity** (ERC-8004 compatible)
+- An **ERC-20 token** with a constant-product bonding curve
+- Automatic **Uniswap V3 graduation** with permanently locked liquidity
+- Optional **staking rewards** for holders
 
----
+## How It Works
 
-## About
+```
+Launch → Bonding Curve → Graduation → Post-Grad Swap → Hiring
+```
 
-> **This repository contains the smart contracts of Qurve.** The backend and frontend are closed-source and live in separate private repositories.
+1. **Launch** — Creator calls `AgentTokenFactory.launchAgent()`. In one transaction: ERC-20 token, bonding curve, and soulbound agent identity are deployed.
+2. **Bonding Curve** — Users buy/sell on a constant-product curve (`x·y = k`). Anti-snipe surtax applies during the first 60 seconds. 2% fee (1% platform + 1% flex).
+3. **Graduation** — When the curve threshold is met, anyone can call `GraduationManager.graduate()` to migrate liquidity to a Uniswap V3 pool. LP NFT is burned to `0xdead` — permanently locked.
+4. **Post-Grad** — Users swap through `AgentSwapRouter` (1% fee). CREATOR mode: creator claims. HOLDERS mode: stakers earn.
+5. **Hiring** — Users call agent endpoints via backend A2A gateway. Reputation and validation recorded on-chain.
 
-Qurve is a permissionless protocol for launching, pricing, and monetizing AI agents on-chain. This repo provides:
+## Documentation
 
-| Component | Purpose |
+| Document | Description |
 |---|---|
-| **AgentLaunchRegistry** | Soulbound agent identity (ERC-721) |
-| **AgentTokenFactory** | One-transaction agent launch |
-| **AgentBondingCurve** | Constant-product price discovery |
-| **GraduationManager** | Uniswap V3 liquidity migration |
-| **AgentSwapRouter** | Post-graduation swap + fee |
-| **HolderRewardsDistributor** | Staking for HOLDERS mode |
-| **ReputationBridge** | Signed on-chain feedback |
-| **ValidationRegistry** | Third-party task attestation |
+| [Architecture](docs/architecture.md) | Contract relationships, bonding curve math, graduation flow |
+| [Deployment](docs/deployment.md) | Deployment order, addresses, chain configs |
+| [Admin Controls](docs/admin-controls.md) | Full enumeration of privileged functions |
+| [Events](docs/events.md) | All emitted events across contracts |
+| [Security](docs/security.md) | Security model, known limitations, best practices |
+| [Integration](docs/integration.md) | Code examples for launching, buying, selling, staking |
+| [Changelog](CHANGELOG.md) | Version history and release notes |
+| [Contributing](CONTRIBUTING.md) | Development setup and PR guidelines |
 
-> **What is closed-source:** indexer, backend API, frontend, agent SDK. Anyone can build their own against the same contracts.
+## Quick Start
 
----
+```bash
+git clone https://github.com/qurve-launchpad/qurve-contracts
+cd qurve-contracts
+npm install
+npx hardhat compile
+npx hardhat test
+```
 
-## Table of Contents
+## Core Contracts
 
-- [Why Qurve](#why-qurve)
-- [Core Design](#core-design)
-- [Fee Schedule](#fee-schedule)
-- [Admin Surface](#admin-surface)
-- [Deployed Contracts](#deployed-contracts)
-- [Quick Start](#quick-start)
-- [Documentation](#documentation)
-- [Security](#security)
-- [Contributing](#contributing)
-- [License](#license)
+| Contract | Description |
+|---|---|
+| `AgentLaunchRegistry` | Soulbound ERC-721 agent identity |
+| `AgentTokenFactory` | One-transaction launch entry point |
+| `AgentBondingCurve` | Constant-product price discovery |
+| `GraduationManager` | Uniswap V3 liquidity migration |
+| `AgentSwapRouter` | Post-graduation swap + fee routing |
+| `HolderRewardsDistributor` | Staking for HOLDERS mode |
+| `ReputationBridge` | Signed on-chain feedback (ERC-8004) |
+| `ValidationRegistry` | Third-party task attestation |
 
----
+## Tokenomics
 
-## Why Qurve
-
-### Compared to typical launchpads
-
-| Capability | Qurve | Typical Launchpad |
-|---|:---:|:---:|
-| **Agent identity** | ✅ Soulbound ERC-721 | ❌ None |
-| **Post-graduation economics** | ✅ Router + staking | ⚠️ Abandoned |
-| **Fee destination** | ✅ Immutable at launch | ❌ Platform decides |
-| **LP lock** | ✅ Burned to `0xdead` | ⚠️ Often a promise |
-| **Anti-snipe protection** | ✅ 0–4% linear decay | ⚠️ Sometimes |
-| **Admin surface** | ✅ Fully enumerated | ❌ Often opaque |
-| **Multi-chain** | ✅ Native, no bridges | ⚠️ Single or bridged |
-| **Machine-to-machine payment** | ✅ A2A-compatible | ❌ Web2 rails |
-
-### What Qurve does NOT claim
-
-> **Post-graduation swap fees are voluntary.** The 1% fee applies only to swaps routed through the Qurve `AgentSwapRouter`. Direct Uniswap swaps bypass it. This is documented, not hidden.
-
----
-
-## Core Design
-
-### Immutable reward mode
-
-| Mode | Flex fee destination | Claim mechanism |
-|---|---|---|
-| **CREATOR** | Creator's claim pool | Manual, dashboard |
-| **HOLDERS** | Staking distributor | Staking, post-grad |
-
-> **Set in the curve's constructor.** Cannot be changed by creator, platform, or admin.
-
-### Liquidity locked forever
-
-The LP NFT is minted to `0xdead` at graduation. No function exists to move it.
-
-> **This is not a promise — it is a contract-level constraint.**
-
-### Anti-snipe surtax
-
-t = 0s → +4.0% surtax (added to curve reserve, not as fee)
-t = 30s → +2.0%
-t = 60s → 0.0%
-
-
-> **The earliest buys are the most expensive.** Cost falls on whoever buys first.
-
-### Soulbound identity
-
-| Layer | Type | Transferable |
-|---|---|:---:|
-| **Economic (token)** | ERC-20 | ✅ Liquid |
-| **Identity (agent)** | ERC-721 | ❌ Soulbound |
-
-> **This separation prevents an agent's reputation from being purchased outright.**
-
----
-
-## Fee Schedule
-
-| Phase | Platform | Flex | Anti-snipe | Total |
-|---|:---:|:---:|:---:|:---:|
-| **Curve trade, t < 60s** | 1.0% | 1.0% | 0–4% | 2.0–6.0% |
-| **Curve trade, t ≥ 60s** | 1.0% | 1.0% | 0% | 2.0% |
-| **Post-grad swap (via router)** | 0.5% | 0.5% | — | 1.0% |
-| **Launch (flat anti-spam)** | ~$1 | — | — | — |
-| **Graduation** | 0 | 0 | — | — |
-
-> **No hidden fee. No admin override.**
-
----
-
-## Admin Surface
-
-Qurve minimizes admin surface, but does not eliminate it.
-
-### What no admin can do
-
-| Action | Enforced |
-|---|:---:|
-| Mint tokens after launch | ✅ Not possible |
-| Withdraw curve reserves outside graduation | ✅ Not possible |
-| Move or withdraw LP | ✅ Not possible |
-| Withdraw holder rewards | ✅ Not possible |
-| Change reward mode | ✅ Not possible |
-| Pause, freeze, or blacklist | ✅ No `pause()` function exists |
-
-### What admin can do
-
-| Contract | Function | Effect |
-|---|---|---|
-| `AgentLaunchRegistry` | `setEndpointVerified` | Mark endpoint verified |
-| `AgentTokenFactory` | `setAntiSnipeEnabled` | Toggle for future launches |
-| `AgentTokenFactory` | `setGraduationManager` | Point to new GM |
-| `GraduationManager` | `setGraduationSlippageBps` | Adjust LP mint slippage |
-| `ReputationBridge` | `setMinRaterInterval` | Adjust feedback cooldown |
-
-> **Full list:** [docs/admin-controls.md](./docs/admin-controls.md)
-
----
+| Parameter | Value |
+|---|---|
+| Total Supply | 1,000,000,000 (1B) |
+| Tokens for Sale | 800,000,000 (80%) |
+| Tokens for Liquidity | 200,000,000 (20%) |
+| Platform Fee (bonding) | 1.0% |
+| Flex Fee (bonding) | 1.0% (CREATOR or HOLDERS) |
+| Post-Graduation Fee | 1.0% (via AgentSwapRouter) |
+| Anti-Snipe Surtax | 0–4% (decays over 60s) |
 
 ## Deployed Contracts
 
-### BOT Chain — Mainnet (677)
+### BOT Chain Mainnet (677)
 
 | Contract | Address |
 |---|---|
-| **Registry** | `0xAB180c46651c5e7a2D74672A87fAEDF9253499eC` |
-| **Factory** | `0xBB0a2712Da7129abBBF3FB09923b2d7B59b74ee6` |
-| **Reputation** | `0x081853e6395Ee8903D0bEE64F24B21BE3D64b52` |
-| **Validation** | `0x4Dc7B1C33b1f1697040E38De8708A57755c5fb10` |
-| **Graduation** | `0x74845faD460Bf2951b712F43EF946c5B2c867570` |
-| **Swap Router** | `0xE593b3eD7aC4e118686e68850b216cc287a5545C` |
+| Registry | `0xAB180c46651c5e7a2D74672A87fAEDF9253499eC` |
+| Factory | `0xBB0a2712Da7129abBBF3FB09923b2d7B59b74ee6` |
+| Reputation | `0x081853e6395Ee8903D0bEE64F24B21BE3D64b52` |
+| Validation | `0x4Dc7B1C33b1f1697040E38De8708A57755c5fb10` |
+| Graduation | `0x74845faD460Bf2951b712F43EF946c5B2c867570` |
+| Swap Router | `0xE593b3eD7aC4e118686e68850b216cc287a5545C` |
 
 ### Arc Testnet (5042002)
 
 | Contract | Address |
 |---|---|
-| **Registry** | `0x65CaB3E5180724063A7e189691649C895335600c` |
-| **Factory** | `0x244367954cBe4EbaDC2B474047b4A62D4C82306c` |
-| **Reputation** | `0x0EDaDcC2B0b1F305a049866C48e7f21874e8C99a` |
-| **Validation** | `0xE73C230E5A203b3FC08cD35aa01D2E8166Be13e9` |
-| **Swap Router** | `0xe4c8Cf5866a2e51E28e3F6f2bb22f55202a56211` |
+| Registry | `0x65CaB3E5180724063A7e189691649C895335600c` |
+| Factory | `0x244367954cBe4EbaDC2B474047b4A62D4C82306c` |
 
-### Base Sepolia (84532)
+> Full list of addresses per chain: [docs/deployment.md](docs/deployment.md#deployed-contracts)
 
-| Contract | Address |
-|---|---|
-| **Registry** | `0x6af48f03572D7f6D3d80fEa2d0FE82E28e3E32C1` |
-| **Factory** | `0x8Ee73a8c5f8EE868D6FB7112DBBF63402Acbf473` |
-| **Reputation** | `0x75caF6E6788F0DdfbA79020BEB9Fc716ad05e5ae` |
-| **Validation** | `0xE7e473bfA6258e10Dd82B83F0EcD773e3bacd16c` |
-| **Graduation** | `0xA85AbB23bAFC13340AF9bb8f44E31366E029f805` |
-| **Swap Router** | `0x0Fd84b95616D7e1Ec43Ad567Fd9FB515588E0d33` |
+## Project Structure
 
-> **Verify addresses** against the source repository before interacting. Contracts are deployed as-is and cannot be changed.
-
----
-
-## Quick Start
-
-### Install
-
-```bash
-git clone https://github.com/qurve/qurve-contracts
-cd qurve-contracts
-npm install ```
-
-### Compile
-```bash
-npx hardhat compile```
-
- ### Test
-```bash
-npx hardhat test
 ```
+qurve-contracts/
+├── contracts/           # Solidity contracts + interfaces + mocks
+├── docs/                # Architecture, deployment, security docs
+├── script/              # Per-chain deploy scripts
+├── test/                # Hardhat test suite
+├── assets/              # Logos, diagrams
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── README.md
+└── package.json
+```
+
+## Testing
+
+```bash
+npx hardhat test                    # Full suite
+REPORT_GAS=true npx hardhat test    # With gas report
+npx hardhat coverage                # With coverage
+```
+
+## Security
+
+**Status: Pre-Audit.** This software has not been audited. Use at your own risk.
+
+Key properties:
+
+- ✅ Contracts are immutable after deployment
+- ✅ LP NFT is permanently locked to `0xdead`
+- ✅ No pause, freeze, or blacklist
+- ✅ No admin key can move user funds
+- ✅ Admin surface fully enumerated in [docs/admin-controls.md](docs/admin-controls.md)
+
+For security disclosures, please use GitHub's [private security advisory](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability) feature or email `security@qurve.fun`.
+
+See [docs/security.md](docs/security.md) for the full threat model.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and PR guidelines.
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
