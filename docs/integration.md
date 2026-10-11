@@ -6,8 +6,8 @@ Build a compatible client against Qurve contracts.
 
 | Client Type | Complexity | Notes |
 |---|:---:|---|
-| **Read-only dashboard** | Low | Just indexer + RPC reads |
-| **Trading interface** | Medium | Needs wallet + trade build |
+| **Read-only dashboard** | Low | Indexer + RPC reads |
+| **Trading interface** | Medium | Wallet + trade build |
 | **Agent marketplace** | Medium | Needs A2A gateway |
 | **Full client** | High | Everything + payments |
 
@@ -19,7 +19,7 @@ Build a compatible client against Qurve contracts.
 import { createPublicClient, http } from "viem";
 
 const client = createPublicClient({
-  transport: http("https://rpc.botchain.ai"),
+  transport: http("https://rpc.testnet.arc.io"),
 });
 
 const price = await client.readContract({
@@ -31,7 +31,7 @@ const price = await client.readContract({
 
 ### Indexer Setup
 
-Listen to events, store in your DB. See [events.md](./events.md) for the full event list.
+Listen to events, store in your DB. See [events.md](./events.md) for the full list.
 
 ```ts
 const unwatch = client.watchContractEvent({
@@ -46,29 +46,192 @@ const unwatch = client.watchContractEvent({
 });
 ```
 
-## Minimum Viable Client
+## Launching an Agent
 
-### 1. Indexer
+```solidity
+AgentTokenFactory.LaunchParams memory params = AgentTokenFactory.LaunchParams({
+    name: "MyAgent",
+    symbol: "AGT",
+    agentURI: "ipfs://...",
+    endpoint: "https://api.myagent.com",
+    virtualEthReserve: 1 ether,
+    devBuyMinTokensOut: 0,
+    rewardMode: IAgentBondingCurve.RewardMode.HOLDERS
+});
 
-- Listen to `AgentRegistered` + `AgentLaunched`
-- Listen to `Buy` + `Sell` per curve
-- Listen to `Graduated` per curve
-- Store in PostgreSQL
+// msg.value = launchFee + optional dev-buy amount
+agentTokenFactory.launchAgent{value: launchFee + devBuy}(params);
+```
 
-### 2. API
+**Result**: `AgentToken` (ERC-20), `AgentBondingCurve`, and `AgentLaunchRegistry` entry (ERC-721) created in one transaction.
 
-- `GET /agents` — paginated list
-- `GET /agents/:chainId/:agentId` — detail
-- `GET /agents/:chainId/:agentId/trades` — trade history
-- `POST /trade/quote` — quote via contract
-- `POST /trade/build` — build unsigned tx
+Read `launchFee()` first:
 
-### 3. Frontend
+```ts
+const fee = await factory.read.launchFee();
+```
 
-- Wallet connect (wagmi + RainbowKit)
-- Agent list + detail
-- Trade widget
-- Portfolio view
+## Buying on the Bonding Curve
+
+```solidity
+// Quote expected output
+uint256 tokensOut = curve.quoteBuy(ethInAfterFee);
+
+// Execute with slippage protection
+uint256 received = curve.buy{value: ethIn}(ethIn, minTokensOut);
+```
+
+> `quoteBuy` clamps to remaining supply. Actual `buy` may refund excess ETH if partial fill occurred.
+
+## Selling on the Bonding Curve
+
+```solidity
+// Quote expected output
+uint256 ethOut = curve.quoteSell(tokensIn);
+
+// Approve tokens to curve, then sell
+agentToken.approve(address(curve), tokensIn);
+uint256 received = curve.sell(tokensIn, minEthOut);
+```
+
+## Checking Graduation Status
+
+```solidity
+bool eligible = curve.isGraduationEligible();   // threshold met OR sold out
+bool graduated = curve.isGraduated();            // migration completed
+
+if (eligible && !graduated) {
+    // Anyone can trigger graduation
+    graduationManager.graduate(address(curve));
+}
+```
+
+## Post-Graduation Swaps
+
+After graduation, swaps route through `AgentSwapRouter`:
+
+```solidity
+// Buy with native token
+agentSwapRouter.buy{value: amountIn}(tokenAddress, minTokensOut);
+
+// Sell
+agentToken.approve(address(agentSwapRouter), amountIn);
+agentSwapRouter.sell(tokenAddress, amountIn, minEthOut);
+```
+
+> Fee is only charged when trading through this router. Direct Uniswap V3 swaps bypass the 1% fee (documented limitation).
+
+## Staking for HOLDERS Mode
+
+Only available for tokens with `rewardMode == HOLDERS` and completed graduation.
+
+```solidity
+// Look up distributor
+address dist = graduationManager.distributorOf(tokenAddress);
+require(dist != address(0), "not a HOLDERS token");
+
+// Approve staking token
+agentToken.approve(dist, amount);
+
+// Stake
+HolderRewardsDistributor(dist).stake(amount);
+
+// Claim (anytime)
+HolderRewardsDistributor(dist).claim();
+
+// Unstake (after UNSTAKE_COOLDOWN = 20 minutes)
+HolderRewardsDistributor(dist).unstake(amount);
+```
+
+## Reading Agent State
+
+```solidity
+// Registry
+uint256 agentId = registry.agentIdByToken(tokenAddress);
+IAgentLaunchRegistry.AgentMetadata memory a = registry.getAgent(agentId);
+// a.owner, a.curve, a.endpoint, a.agentURI, a.createdAt,
+// a.endpointVerified, a.officialAgentId
+
+// Curve
+uint256 price = curve.currentPrice();
+uint256 sold = curve.tokensSold();
+uint256 reserve = curve.realEthReserve();
+uint256 threshold = curve.graduationThreshold();
+bool graduated = curve.isGraduated();
+IAgentBondingCurve.RewardMode mode = curve.rewardMode();
+
+// Holder Rewards (HOLDERS mode only)
+( uint256 totalStaked_,
+  uint256 totalDistributed_,
+  uint256 totalClaimed_,
+  uint256 pending_,
+  uint256 unallocated_,
+  bool finalized_ ) = distributor.getGlobalStats();
+
+( uint256 staked,
+  uint256 pendingReward,
+  uint256 claimed,
+  uint256 unstakeAvailableAt ) = distributor.getUserInfo(user);
+```
+
+## Submitting Feedback
+
+```solidity
+// ReputationBridge — signature is (uint256, uint8, bytes32, string)
+reputationBridge.submitFeedback(
+    agentId,
+    uint8(85),                                    // score 0–100
+    keccak256(abi.encodePacked("task-uuid-123")), // taskHash (unique per task)
+    "ipfs://feedback-comment"                     // commentURI
+);
+```
+
+**Constraints:**
+- `score <= 100`
+- `taskHash` unique per `agentId` (already-rated reverts)
+- `minRaterInterval` (default 5 minutes) between ratings by same rater on same agent
+
+## Requesting Validation
+
+```solidity
+// Any user can request validation, but must specify an APPROVED validator
+uint256 requestId = validationRegistry.requestValidation(
+    agentId,
+    validatorAddress,                              // must be approved
+    keccak256(abi.encodePacked("task-uuid-456")),  // taskHash
+    "ipfs://task-spec"                             // requestURI
+);
+
+// The approved validator responds
+validationRegistry.submitValidation(requestId, 85, "ipfs://response");
+// score >= passThreshold (default 60) → status = Passed
+```
+
+## Event Monitoring
+
+```javascript
+curve.on("Buy", (buyer, ethIn, tokensOut, feePaid, antiSnipeFee) => {
+    console.log(`Buy: ${ethers.formatEther(ethIn)} → ${tokensOut} tokens`);
+});
+
+curve.on("Graduated", (pool, ethLiq, tokenLiq, lpTokenId) => {
+    console.log(`Graduated to ${pool}, LP #${lpTokenId}`);
+});
+
+graduationManager.on("HolderDistributorDeployed",
+  (token, distributor, initialPool) => {
+    console.log(`Distributor ${distributor} for ${token}`);
+});
+
+swapRouter.on("FlexFeeReroutedToTreasury", (token, amount) => {
+    // ⚠️ Alert admin — router not yet registered as notifier
+    console.warn(`Flex fee rerouted for ${token}: ${amount}`);
+});
+
+distributor.on("RewardClaimed", (user, amount) => {
+    console.log(`Claimed: ${ethers.formatEther(amount)}`);
+});
+```
 
 ## A2A Integration
 
@@ -107,32 +270,30 @@ curl -X POST https://agent.example.com/a2a \
 ### Fork Testing
 
 ```bash
-anvil --fork-url https://rpc.botchain.ai
+anvil --fork-url https://rpc.testnet.arc.io
 ```
 
-Deploy to fork, run test scenarios, iterate.
+### Testnet Addresses
 
-### Testnet
+| Chain | Chain ID | Deployed |
+|---|:---:|:---:|
+| Arc Testnet | 5042002 | ✅ |
+| Base Sepolia | 84532 | (pending) |
+| BOT Chain | 677 | (pending verification) |
 
-All Qurve contracts are live on:
-
-- Arc Testnet (5042002)
-- Base Sepolia (84532)
-- BOT Chain (677)
-
-Use these for integration testing.
+See [deployment.md](./deployment.md#deployed-contracts) for addresses.
 
 ## Support
 
-- **Contract questions:** GitHub Issues on this repo
-- **Integration support:** Discord `#builders` channel
+- **Contract questions:** GitHub Issues
+- **Integration support:** Discord `#builders`
 - **Bug reports:** `security@qurve.fun`
 
 ## What We Do Not Provide
 
 | Component | Status |
 |---|---|
-| Backend API access | Not for public use |
+| Backend API access | Closed-source |
 | Indexer source | Closed-source |
 | Frontend source | Closed-source |
 | Agent SDK | Planned (public) |

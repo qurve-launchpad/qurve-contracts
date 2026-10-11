@@ -2,38 +2,100 @@
 
 ## Status
 
-> **Qurve contracts have not undergone a third-party security audit.** They have been developed with internal review and live-tested on testnets plus mainnet deployments. Treat them as pre-audit infrastructure.
+> **Qurve contracts have not undergone a third-party security audit.** They have been developed with internal review and live-tested on Arc Testnet. Treat them as pre-audit infrastructure.
 
 ## What We Claim
 
 | Claim | Verified |
 |---|:---:|
 | Code is immutable after deployment | ✅ |
-| LP has no exit function | ✅ |
+| No contract is upgradeable | ✅ (all plain Ownable/AccessControl, no UUPS/proxy) |
+| LP has no exit function | ✅ (NFT minted to `0xdead`) |
 | No admin key can move user funds | ✅ |
 | No pause, freeze, or blacklist | ✅ |
-| No upgradeability | ✅ |
 
 ## What We Do NOT Claim
 
 | Claim | Reason |
 |---|---|
-| **"Battle-tested"** | Not until audit + mainnet operation |
-| **"Bug-free"** | One fix already applied, others may exist |
-| **"Audited"** | Audit not scheduled yet |
-| **"Upgradeable"** | Contracts are immutable by design |
+| "Battle-tested" | Not until audit + mainnet operation |
+| "Bug-free" | Fixes already applied, others may exist |
+| "Audited" | Audit not scheduled yet |
+| "Multi-chain battle-tested" | Currently verified on Arc Testnet |
 
-## Known Fixes
+## Known Fixes Applied
 
-### FIX #2 — `Math.mulDiv` overflow
+### FIX #1 — Uniswap V3 tick alignment
 
-**Location:** `GraduationManager` LP price computation
+**Location:** `GraduationManager.TICK_LOWER` / `TICK_UPPER`
 
-**Issue:** `Math.mulDiv` was used without checking for overflow. On chains where the agent token address sorts higher than the wrapped native token, the multiplication overflowed and reverted approximately 50% of all graduations.
+**Issue:** Original values `-887200 / 887200` are not multiples of 60 (tick spacing for fee tier 3000). Every `mint()` would revert.
 
-**Resolution:** Applied and present in current deployment.
+**Resolution:** Corrected to `-887220 / 887220` (both divisible by 60, still ≤ 887272).
 
-**Lesson:** Full-range LP computation requires careful decimal handling when token order is not guaranteed.
+### FIX #2 — `Math.mulDiv` overflow in LP price computation
+
+**Location:** `GraduationManager._computeSqrtPriceX96`
+
+**Issue:** `amount1 * (1 << 192)` overflowed `uint256` when `amount1` was the agent-token side (~2e26). Reverted ~50% of graduations (case: `tokenAddr > weth`).
+
+**Resolution:** Uses `Math.mulDiv(amount1, 1 << 128, amount0)` (512-bit intermediate) then `sqrt() << 32`.
+
+### FIX #4 — Two-way curve validation
+
+**Location:** `GraduationManager.graduate`
+
+**Issue:** Original check verified `curve.agentToken()` returned a registered token — a fake curve could return the real token address and pass the guard, then init the real pool at a manipulated price.
+
+**Resolution:** Now requires `agentFactory.isAgentToken(token)` AND `agentFactory.curveOfToken(token) == curveAddr`.
+
+### FIX #5 — LP mint slippage guard
+
+**Location:** `GraduationManager.graduate`
+
+**Issue:** If the pool was pre-initialized by a third party at a skewed price, `mint()` would silently accept a bad ratio.
+
+**Resolution:** Added `amount0Min` / `amount1Min` from `graduationSlippageBps` (default 1%, max 10%).
+
+### FIX C-1 — No auto-lock on threshold
+
+**Location:** `AgentBondingCurve._executeBuy`
+
+**Issue:** Original design locked the curve the moment the threshold was reached, trapping funds if graduation migration failed.
+
+**Resolution:** Curve remains fully tradable until `GraduationManager.graduate()` completes and calls `markGraduated()`. If migration fails, the whole tx reverts and holders can keep selling.
+
+### FIX M1 — Stray ETH sweep
+
+**Location:** `AgentBondingCurve.sweepStrayETH`
+
+**Issue:** ETH sent directly to the curve address (not via `buy`/`topUpCreatorPool`) was unaccounted and stuck forever.
+
+**Resolution:** Permissionless `sweepStrayETH()` routes unaccounted balance to `protocolFeeRecipient`.
+
+### FIX M3 — `tokenURI` reverts on missing agent
+
+**Location:** `AgentLaunchRegistry.tokenURI`
+
+**Issue:** Returned empty string for non-existent `agentId`, confusing wallets/explorers.
+
+**Resolution:** Reverts with `AgentNotFound()` (EIP-721 compliant).
+
+### FIX H1 — Fee reroute instead of revert
+
+**Location:** `AgentSwapRouter._routeFee`
+
+**Issue:** If a distributor existed but the router wasn't yet registered as notifier, the swap reverted.
+
+**Resolution:** Redirects flex fee to treasury and emits `FlexFeeReroutedToTreasury`. Backend alerts admin to call `setNotifier()`.
+
+### FIX C1 — `address(0)` distributor guard
+
+**Location:** `AgentSwapRouter._routeFee`
+
+**Issue:** Sending ETH to `address(0)` succeeds on the EVM and burns the funds silently.
+
+**Resolution:** Reverts with `DistributorNotReady()` if distributor is zero.
 
 ## Threat Model
 
@@ -45,6 +107,7 @@
 | Solidity 0.8.x overflow checks | Enabled |
 | Uniswap V3 core | Audited, used as-is |
 | Immutability of `immutable` vars | Guaranteed by EVM |
+| Native `msg.value` semantics | Guaranteed by EVM |
 
 ### Out-of-scope
 
@@ -53,29 +116,97 @@
 | Frontend UI | Closed-source |
 | Backend API | Closed-source |
 | Indexer | Closed-source |
-| Agent endpoints | Third-party |
-| Circle Gateway (x402) | External |
+| Agent endpoints (A2A) | Third-party |
+| ERC-8004 external registries | External, best-effort sync only |
+| Uniswap V3 pool after graduation | Public & permissionless |
 
 ### Attack Vectors Considered
 
 | Vector | Mitigation |
 |---|---|
-| **Reentrancy** | `ReentrancyGuard` on state-changing functions with external calls |
-| **Front-running** | Anti-snipe surtax (0–4% over 60s) |
-| **Flash loan** | Bonding curve math linear in reserve; flash loans don't gain advantage |
+| **Reentrancy** | `ReentrancyGuard` on `AgentBondingCurve`, `AgentTokenFactory`, `GraduationManager`, `AgentSwapRouter`, `HolderRewardsDistributor` |
+| **Front-running / sniping** | Anti-snipe surtax (0–4% over 60s, linear decay) |
+| **Flash loan** | Curve math linear in reserve — flash loans don't gain advantage |
 | **Oracle manipulation** | Curve uses internal reserve ratio, not external oracle |
-| **Rug pull** | LP NFT burned to `0xdead` — no exit function exists |
+| **Rug pull** | LP NFT burned to `0xdead`; no transfer function |
 | **Admin abuse** | Admin surface fully enumerated and bounded |
-| **Upgrade attack** | No upgradeability. Immutable by design. |
+| **Upgrade attack** | None — no upgradeability anywhere |
+| **Fake curve at graduation** | Two-way validation in `graduate()` (FIX #4) |
+| **Skewed pre-init pool** | `_alignExistingPool` + `amountMin` slippage (FIX #5) |
+| **Sandwiching curve trades** | `minTokensOut` / `minEthOut` params |
+| **Partial fill at sell-out** | Clamp with ETH refund (no ETH kept) |
+| **Fee stuck on abandoned curve** | `sweepAbandonedHolderPool` after 30 days |
+| **Stray ETH stuck** | `sweepStrayETH` permissionless |
+| **Contract address squatting** | Deterministic deploy from factory |
 
 ### Attack Vectors Accepted
 
 | Vector | Reason accepted |
 |---|---|
 | **Sniper bot** on first block | Mitigated by surtax, not eliminated |
-| **Fee bypass via external router** | Uniswap pool is public. Fee is voluntary. |
+| **Fee bypass via external router** | Uniswap V3 pool is public. Fee is voluntary. |
 | **Wash trading** | Not economically viable due to 2% trade fee |
-| **Sybil feedback** | Rate-limited but not impossible. Dispute path available. |
+| **Sybil feedback** | Rate-limited via `minRaterInterval`; dispute path available |
+| **Creator fee pull** | `claimCreatorFees` is manual — creator may never claim |
+
+## Reentrancy Protection
+
+All state-mutating contracts with external calls use OpenZeppelin's `ReentrancyGuard`:
+
+- `AgentBondingCurve`
+- `AgentTokenFactory`
+- `GraduationManager`
+- `AgentSwapRouter`
+- `HolderRewardsDistributor`
+
+## Access Control
+
+| Contract | Access Model |
+|---|---|
+| `AgentLaunchRegistry` | `AccessControl` (`DEFAULT_ADMIN_ROLE`, `FACTORY_ROLE`, `VERIFIER_ROLE`) |
+| `AgentTokenFactory` | `Ownable` + `ReentrancyGuard` |
+| `AgentToken` | No owner — factory-only init, curve-only mint/burn |
+| `AgentBondingCurve` | No owner — immutables only |
+| `GraduationManager` | `Ownable` + `ReentrancyGuard` (no upgradeability) |
+| `AgentSwapRouter` | `Ownable` + `ReentrancyGuard` (all params immutable) |
+| `HolderRewardsDistributor` | `Ownable` + `ReentrancyGuard` |
+| `ReputationBridge` | `AccessControl` (`DEFAULT_ADMIN_ROLE`, `DISPUTER_ROLE`) |
+| `ValidationRegistry` | `AccessControl` (`DEFAULT_ADMIN_ROLE`, `VALIDATOR_ADMIN_ROLE`) |
+
+## External Calls — Safety Pattern
+
+All external calls to non-critical dependencies follow a **non-fatal** pattern:
+
+| Call site | Pattern |
+|---|---|
+| `AgentLaunchRegistry._trySyncOfficialIdentity` | try/catch, no gas cap (last op in tx) |
+| `ReputationBridge._trySyncOfficialFeedback` | try/catch + `{gas: OFFICIAL_CALL_GAS}` (200k) |
+| `AgentLaunchRegistry.onERC721Received` forward | try/catch on `safeTransferFrom` |
+| `AgentSwapRouter._routeFee` → distributor | try/catch on notifier status + emit event |
+
+## ERC-8004 Stability Warning
+
+ERC-8004 is a **Draft standard**. The `giveFeedback` signature has changed at least once during development.
+
+`ReputationBridge` uses:
+```solidity
+giveFeedback(
+    uint256 agentId,
+    int128 value,
+    uint8 valueDecimals,
+    string tag1,
+    string tag2,
+    string endpoint,
+    string feedbackURI,
+    bytes32 feedbackHash
+)
+```
+
+If the deployed registry's ABI differs, the call reverts → caught → `OfficialFeedbackSyncSkipped` emitted. Local feedback is **always** stored.
+
+## Validation Registry Not Connected
+
+`ValidationRegistry` is **deliberately not** connected to the official ERC-8004 Validation Registry. That registry was withdrawn from standard multi-chain deployment pending a community rework. Connecting to a "seemingly official" address now risks connecting to a version that will be deprecated.
 
 ## Responsible Disclosure
 
@@ -90,22 +221,6 @@ Include:
 - Your contact for follow-up
 
 **We do not currently offer a bug bounty.** This will change after audit.
-
-## No Pause Function
-
-Qurve deliberately does not implement `pause()` on any contract.
-
-**Consequences:**
-- If a bug is discovered after deployment, there is no way to halt affected contracts
-- The only mitigation is deploying a corrected version and migrating
-- Users of existing contracts retain full access to their funds and tokens
-
-**Rationale:**
-- "No admin override" philosophy
-- Prevents governance capture
-- Users can exit at any time without permission
-
-This trade-off is acknowledged and accepted.
 
 ## Multisig Migration
 
@@ -123,23 +238,9 @@ Currently, all admin roles are held by a **single deployer EOA per chain**. This
 
 Before interacting with any Qurve contract:
 
-1. **Check address** on the [deployed contracts list](../README.md#deployed-contracts)
+1. **Check address** on the [deployed contracts list](./deployment.md#deployed-contracts)
 2. **Verify source code** on the block explorer
 3. **Compare** with this repository's `contracts/` folder
 4. **Confirm** the bytecode hash matches
 
 Do not trust any address not listed in this repository.
-
-## Emergency Response
-
-There is no emergency admin key. In case of a discovered vulnerability:
-
-| Action | Possible |
-|---|---|:---:|
-| Pause contracts | ❌ |
-| Freeze user funds | ❌ |
-| Blacklist address | ❌ |
-| Deploy fix | ✅ (as new version) |
-| Warn users | ✅ (off-chain) |
-
-Users always retain access to their funds and tokens, regardless of contract state.

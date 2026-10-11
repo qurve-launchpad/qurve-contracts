@@ -1,6 +1,6 @@
 # Events Reference
 
-Every event emitted by Qurve contracts, for indexer integration.
+Every event emitted by Qurve contracts — verified against actual source code — for indexer integration.
 
 ## AgentLaunchRegistry
 
@@ -33,6 +33,45 @@ event EndpointVerified(
 );
 ```
 
+### `EndpointCooldownUpdated`
+
+```solidity
+event EndpointCooldownUpdated(uint256 oldValue, uint256 newValue);
+```
+
+### `OfficialSyncEnabledUpdated`
+
+```solidity
+event OfficialSyncEnabledUpdated(bool enabled);
+```
+
+### `OfficialAgentRegistered`
+
+```solidity
+event OfficialAgentRegistered(
+    uint256 indexed agentId,
+    uint256 officialAgentId
+);
+```
+
+### `OfficialRegistrationFailed`
+
+```solidity
+event OfficialRegistrationFailed(
+    uint256 indexed agentId,
+    bytes reason
+);
+```
+
+### `OfficialNFTClaimed`
+
+```solidity
+event OfficialNFTClaimed(
+    uint256 indexed agentId,
+    address indexed to
+);
+```
+
 ### `Transfer`
 
 Standard ERC-721 `Transfer`. Soulbound: only emits from `address(0)` (mint).
@@ -52,7 +91,7 @@ event AgentLaunched(
     uint256 virtualEthReserve,
     uint256 graduationThreshold,
     bool antiSnipeEnabled,
-    uint8 rewardMode
+    IAgentBondingCurve.RewardMode rewardMode
 );
 ```
 
@@ -69,6 +108,12 @@ event GraduationManagerUpdated(
     address indexed oldManager,
     address indexed newManager
 );
+```
+
+### `LaunchFeeUpdated`
+
+```solidity
+event LaunchFeeUpdated(uint256 oldFee, uint256 newFee);
 ```
 
 ## AgentBondingCurve
@@ -125,6 +170,12 @@ event HolderPoolSwept(
 );
 ```
 
+### `StrayETHSwept`
+
+```solidity
+event StrayETHSwept(uint256 amount);
+```
+
 ## GraduationManager
 
 ### `AgentGraduated`
@@ -160,10 +211,7 @@ event SwapRouterUpdated(
 ### `GraduationSlippageUpdated`
 
 ```solidity
-event GraduationSlippageUpdated(
-    uint16 oldBps,
-    uint16 newBps
-);
+event GraduationSlippageUpdated(uint16 oldBps, uint16 newBps);
 ```
 
 ## AgentSwapRouter
@@ -181,42 +229,41 @@ event SwapExecuted(
 );
 ```
 
+### `FlexFeeReroutedToTreasury`
+
+```solidity
+event FlexFeeReroutedToTreasury(
+    address indexed agentToken,
+    uint256 amount
+);
+```
+
+> **Backend alerting:** Subscribe to this event. It means the distributor exists but the router isn't registered as a notifier yet. Admin should call `HolderRewardsDistributor.setNotifier(router, true)` for the affected token.
+
 ## HolderRewardsDistributor
 
 ### `Staked`
 
 ```solidity
-event Staked(
-    address indexed user,
-    uint256 amount
-);
+event Staked(address indexed user, uint256 amount);
 ```
 
 ### `Unstaked`
 
 ```solidity
-event Unstaked(
-    address indexed user,
-    uint256 amount
-);
+event Unstaked(address indexed user, uint256 amount);
 ```
 
 ### `RewardClaimed`
 
 ```solidity
-event RewardClaimed(
-    address indexed user,
-    uint256 amount
-);
+event RewardClaimed(address indexed user, uint256 amount);
 ```
 
 ### `RewardAdded`
 
 ```solidity
-event RewardAdded(
-    uint256 amount,
-    bool heldForGrace
-);
+event RewardAdded(uint256 amount, bool heldForGrace);
 ```
 
 ### `InitialPoolFinalized`
@@ -250,6 +297,16 @@ event FeedbackSubmitted(
 );
 ```
 
+### `ReputationUpdated`
+
+```solidity
+event ReputationUpdated(
+    uint256 indexed agentId,
+    uint256 newAverageScore,
+    uint256 totalFeedback
+);
+```
+
 ### `FeedbackDisputed`
 
 ```solidity
@@ -261,13 +318,33 @@ event FeedbackDisputed(
 );
 ```
 
-### `ReputationUpdated`
+### `MinRaterIntervalUpdated`
 
 ```solidity
-event ReputationUpdated(
+event MinRaterIntervalUpdated(uint256 oldValue, uint256 newValue);
+```
+
+### `OfficialSyncEnabledUpdated`
+
+```solidity
+event OfficialSyncEnabledUpdated(bool enabled);
+```
+
+### `OfficialFeedbackSynced`
+
+```solidity
+event OfficialFeedbackSynced(
     uint256 indexed agentId,
-    uint256 newAverageScore,
-    uint256 totalFeedback
+    uint256 indexed officialAgentId
+);
+```
+
+### `OfficialFeedbackSyncSkipped`
+
+```solidity
+event OfficialFeedbackSyncSkipped(
+    uint256 indexed agentId,
+    bytes reason
 );
 ```
 
@@ -309,6 +386,21 @@ event ValidatorAdded(address indexed validator);
 
 ```solidity
 event ValidatorRemoved(address indexed validator);
+```
+
+### `PassThresholdUpdated`
+
+```solidity
+event PassThresholdUpdated(uint8 oldValue, uint8 newValue);
+```
+
+## AgentToken
+
+Standard ERC-20 events inherited from OpenZeppelin:
+
+```solidity
+event Transfer(address indexed from, address indexed to, uint256 value);
+event Approval(address indexed owner, address indexed spender, uint256 value);
 ```
 
 ## Indexer Reference
