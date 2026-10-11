@@ -13,8 +13,23 @@ import {
 } from "./helpers/fixtures";
 
 describe("AgentBondingCurve", () => {
+  // Default fixture — anti-snipe OFF
   async function fixture() {
     const suite = await deployFullSuite();
+    const { curve, token } = await launchDefaultAgent(
+      suite.factory,
+      suite.creator
+    );
+    const curveContract = await ethers.getContractAt("AgentBondingCurve", curve);
+    const tokenContract = await ethers.getContractAt("AgentToken", token);
+    return { ...suite, curve: curveContract, token: tokenContract };
+  }
+
+  // Anti-snipe fixture — enables anti-snipe on factory BEFORE launch,
+  // so the resulting curve has antiSnipeEnabled = true.
+  async function antiSnipeFixture() {
+    const suite = await deployFullSuite();
+    await suite.factory.connect(suite.owner).setAntiSnipeEnabled(true);
     const { curve, token } = await launchDefaultAgent(
       suite.factory,
       suite.creator
@@ -49,7 +64,7 @@ describe("AgentBondingCurve", () => {
 
       const tokensOut = await curve
         .connect(buyer)
-        .buy.staticCall(ethIn, 0n);
+        .buy.staticCall(ethIn, 0n, { value: ethIn });
       expect(tokensOut).to.be.gt(0n);
     });
 
@@ -95,6 +110,10 @@ describe("AgentBondingCurve", () => {
       await curve.connect(buyer).buy(ethIn, 0n, { value: ethIn });
       const balance = await token.balanceOf(buyer.address);
 
+      await token
+        .connect(buyer)
+        .approve(await curve.getAddress(), balance);
+
       const ethOut = await curve
         .connect(buyer)
         .sell.staticCall(balance, 0n);
@@ -108,6 +127,10 @@ describe("AgentBondingCurve", () => {
       await curve.connect(buyer).buy(ethIn, 0n, { value: ethIn });
       const balance = await token.balanceOf(buyer.address);
 
+      await token
+        .connect(buyer)
+        .approve(await curve.getAddress(), balance);
+
       await expect(curve.connect(buyer).sell(balance, 0n)).to.emit(
         curve,
         "Sell"
@@ -117,18 +140,22 @@ describe("AgentBondingCurve", () => {
 
   describe("Anti-snipe", () => {
     it("charges surtax immediately after launch", async () => {
-      const { curve, buyer } = await loadFixture(fixture);
+      // Use the fixture that enables anti-snipe BEFORE launching
+      const { curve, buyer } = await loadFixture(antiSnipeFixture);
       const ethIn = ethers.parseEther("0.1");
 
+      // t=0 : surtax active (4%) → fewer tokens out
       const tokensOutEarly = await curve
         .connect(buyer)
-        .buy.staticCall(ethIn, 0n);
+        .buy.staticCall(ethIn, 0n, { value: ethIn });
 
+      // Advance past the 60-second anti-snipe window
       await time.increase(61);
 
+      // t>60 : surtax expired → more tokens out
       const tokensOutLate = await curve
         .connect(buyer)
-        .buy.staticCall(ethIn, 0n);
+        .buy.staticCall(ethIn, 0n, { value: ethIn });
 
       expect(tokensOutLate).to.be.gt(tokensOutEarly);
     });
@@ -144,7 +171,7 @@ describe("AgentBondingCurve", () => {
       const quote = await curve.quoteBuy(amountAfterFee);
       const actual = await curve
         .connect(buyer)
-        .buy.staticCall(ethIn, 0n);
+        .buy.staticCall(ethIn, 0n, { value: ethIn });
 
       expect(actual).to.be.closeTo(quote, quote / 100n);
     });

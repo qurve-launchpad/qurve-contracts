@@ -13,11 +13,14 @@ describe("HolderRewardsDistributor", () => {
     const MockToken = await ethers.getContractFactory("MockERC20");
     const stakingToken = await MockToken.deploy("Agent Token", "AGT", 18);
 
+    // ── Constructor: (stakingToken, initialNotifier, initialOwner) ──
     const Distributor = await ethers.getContractFactory(
       "HolderRewardsDistributor"
     );
     const distributor = await Distributor.deploy(
-      await stakingToken.getAddress()
+      await stakingToken.getAddress(),
+      owner.address, // initialNotifier
+      owner.address  // initialOwner
     );
 
     await stakingToken.mint(staker1.address, ethers.parseEther("1000"));
@@ -102,7 +105,8 @@ describe("HolderRewardsDistributor", () => {
         .approve(await distributor.getAddress(), amount);
       await distributor.connect(staker1).stake(amount);
 
-      await expect(distributor.connect(staker1).unstake(amount)).to.be.reverted;
+      await expect(distributor.connect(staker1).unstake(amount)).to.be
+        .reverted;
     });
 
     it("allows unstake after cooldown", async () => {
@@ -127,10 +131,9 @@ describe("HolderRewardsDistributor", () => {
     it("finalizes after grace period", async () => {
       const { distributor, owner } = await loadFixture(deployFixture);
 
-      // Try to finalize before grace
-      await expect(
-        distributor.connect(owner).finalizeInitialPool()
-      ).to.be.reverted;
+      // Cannot finalize before grace period
+      await expect(distributor.connect(owner).finalizeInitialPool()).to.be
+        .reverted;
 
       // Advance past grace period
       await time.increase(2 * 24 * 3600 + 1);

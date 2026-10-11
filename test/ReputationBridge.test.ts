@@ -1,14 +1,43 @@
 // test/ReputationBridge.test.ts
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import {
+  loadFixture,
+  time,
+} from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
 describe("ReputationBridge", () => {
   async function deployFixture() {
-    const [owner, user1, user2, disputer] = await ethers.getSigners();
+    const [owner, user1, user2, disputer, factorySigner] =
+      await ethers.getSigners();
 
+    // ── 1. Deploy AgentLaunchRegistry (needed by ReputationBridge) ──
+    const Registry = await ethers.getContractFactory("AgentLaunchRegistry");
+    const registry = await Registry.deploy(owner.address, ethers.ZeroAddress);
+
+    // ── 2. Grant FACTORY_ROLE so we can register agent #1 ──
+    const FACTORY_ROLE = await registry.FACTORY_ROLE();
+    await registry.grantRole(FACTORY_ROLE, factorySigner.address);
+
+    // ── 3. Register agent #1 (owner = user1) ──
+    await registry
+      .connect(factorySigner)
+      .registerAgent(
+        user1.address,
+        user1.address, // token (dummy)
+        user1.address, // curve (dummy)
+        "Test Agent",
+        "ipfs://test",
+        "https://example.com"
+      );
+
+    // ── 4. Deploy ReputationBridge(registry, admin, officialReputationRegistry) ──
     const Bridge = await ethers.getContractFactory("ReputationBridge");
-    const bridge = await Bridge.deploy(owner.address);
+    const bridge = await Bridge.deploy(
+      await registry.getAddress(),
+      owner.address,
+      ethers.ZeroAddress // disable official sync
+    );
 
     const DISPUTER_ROLE = await bridge.DISPUTER_ROLE();
     const DEFAULT_ADMIN_ROLE = await bridge.DEFAULT_ADMIN_ROLE();
@@ -17,10 +46,13 @@ describe("ReputationBridge", () => {
 
     return {
       bridge,
+      registry,
       owner,
       user1,
       user2,
       disputer,
+      factorySigner,
+      FACTORY_ROLE,
       DISPUTER_ROLE,
       DEFAULT_ADMIN_ROLE,
     };
@@ -50,9 +82,12 @@ describe("ReputationBridge", () => {
         .connect(user1)
         .submitFeedback(1n, 80, taskHash, "ipfs://comment");
 
-      const [avgScore, count] = await bridge.getAverageScore(1n);
+      // getAverageScore returns (avgScoreX100, totalFeedback)
+      // Contract: avgX100 = (scoreSum * 100) / count
+      // For score=80, count=1  →  avgX100 = 8000
+      const [avgScoreX100, count] = await bridge.getAverageScore(1n);
       expect(count).to.equal(1n);
-      expect(avgScore).to.equal(80n);
+      expect(avgScoreX100).to.equal(8000n);
     });
 
     it("reverts for score > 100", async () => {

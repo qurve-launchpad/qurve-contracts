@@ -5,19 +5,48 @@ import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
 describe("ValidationRegistry", () => {
   async function deployFixture() {
-    const [owner, validator, requester, user] = await ethers.getSigners();
+    const [owner, validator, requester, user, factorySigner] =
+      await ethers.getSigners();
 
-    const Registry = await ethers.getContractFactory("ValidationRegistry");
-    const registry = await Registry.deploy(owner.address);
+    // ── 1. Deploy AgentLaunchRegistry (needed by ValidationRegistry) ──
+    const AgentRegistry = await ethers.getContractFactory("AgentLaunchRegistry");
+    const agentRegistry = await AgentRegistry.deploy(
+      owner.address,
+      ethers.ZeroAddress
+    );
+
+    // ── 2. Grant FACTORY_ROLE + register agent #1 ──
+    const FACTORY_ROLE = await agentRegistry.FACTORY_ROLE();
+    await agentRegistry.grantRole(FACTORY_ROLE, factorySigner.address);
+
+    await agentRegistry
+      .connect(factorySigner)
+      .registerAgent(
+        owner.address,
+        owner.address,
+        owner.address,
+        "Test Agent",
+        "ipfs://test",
+        "https://example.com"
+      );
+
+    // ── 3. Deploy ValidationRegistry(registry, admin) ──
+    const Validation = await ethers.getContractFactory("ValidationRegistry");
+    const registry = await Validation.deploy(
+      await agentRegistry.getAddress(),
+      owner.address
+    );
 
     const VALIDATOR_ADMIN_ROLE = await registry.VALIDATOR_ADMIN_ROLE();
 
     return {
       registry,
+      agentRegistry,
       owner,
       validator,
       requester,
       user,
+      factorySigner,
       VALIDATOR_ADMIN_ROLE,
     };
   }
@@ -50,9 +79,8 @@ describe("ValidationRegistry", () => {
 
     it("non-admin cannot add validator", async () => {
       const { registry, user, validator } = await loadFixture(deployFixture);
-      await expect(
-        registry.connect(user).addValidator(validator.address)
-      ).to.be.reverted;
+      await expect(registry.connect(user).addValidator(validator.address)).to.be
+        .reverted;
     });
 
     it("emits ValidatorAdded", async () => {
@@ -126,9 +154,8 @@ describe("ValidationRegistry", () => {
         .connect(requester)
         .requestValidation(1n, validator.address, taskHash, "");
 
-      await expect(
-        registry.connect(user).submitValidation(1n, 85, "")
-      ).to.be.reverted;
+      await expect(registry.connect(user).submitValidation(1n, 85, "")).to.be
+        .reverted;
     });
   });
 });

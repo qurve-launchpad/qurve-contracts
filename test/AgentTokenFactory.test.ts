@@ -10,7 +10,6 @@ import {
   REWARD_MODE_CREATOR,
   REWARD_MODE_HOLDERS,
   TOTAL_SUPPLY,
-  VIRTUAL_TOKEN_RESERVE,
 } from "./helpers/fixtures";
 
 describe("AgentTokenFactory", () => {
@@ -34,7 +33,8 @@ describe("AgentTokenFactory", () => {
       const agent = await registry.getAgent(1n);
       const token = await ethers.getContractAt("AgentToken", agent.token);
       expect(await token.totalSupply()).to.equal(TOTAL_SUPPLY);
-      expect(await token.balanceOf(curve)).to.equal(VIRTUAL_TOKEN_RESERVE);
+      // Curve holds the full 1B supply (800M sale + 200M liquidity reserved)
+      expect(await token.balanceOf(curve)).to.equal(TOTAL_SUPPLY);
     });
 
     it("registers creator as agent owner", async () => {

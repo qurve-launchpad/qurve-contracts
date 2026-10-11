@@ -8,7 +8,9 @@ describe("AgentLaunchRegistry", () => {
     const [owner, factory, user1, user2] = await ethers.getSigners();
 
     const Registry = await ethers.getContractFactory("AgentLaunchRegistry");
-    const registry = await Registry.deploy(owner.address);
+    // Constructor: (admin, officialIdentityRegistry)
+    // ZeroAddress disables external sync (safe for tests)
+    const registry = await Registry.deploy(owner.address, ethers.ZeroAddress);
 
     const FACTORY_ROLE = await registry.FACTORY_ROLE();
     const VERIFIER_ROLE = await registry.VERIFIER_ROLE();
